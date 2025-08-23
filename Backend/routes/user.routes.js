@@ -4,7 +4,8 @@ const User = require("../models/user.model");
 const Wallet = require("../models/wallet.model");
 const { body, validationResult } = require("express-validator");
 const bcrypt = require("bcrypt");
-const { sendOTP } = require("../config/emailServices");
+const { sendOTP } = require("../config/emailService"); // Corrected to emailService
+const jwt = require("jsonwebtoken");
 
 const registerValidation = [
   body("name").notEmpty().withMessage("Name is required"),
@@ -95,6 +96,43 @@ router.post("/register", registerValidation, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: "Server error: " + err.message });
+  }
+});
+
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    if (!user.isVerified) {
+      return res
+        .status(401)
+        .json({
+          message:
+            "Account is not verified. Please check your email for the OTP.",
+        });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials." });
+    }
+
+    const payload = {
+      userId: user._id,
+      email: user.email,
+    };
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "1h",
+    });
+
+    res.json({ message: "Login successful.", token, user });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 

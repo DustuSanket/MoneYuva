@@ -4,8 +4,9 @@ const User = require("../models/user.model");
 const Wallet = require("../models/wallet.model");
 const { body, validationResult } = require("express-validator");
 const bcrypt = require("bcrypt");
-const { sendOTP } = require("../config/emailService"); // Corrected to emailService
+const { sendOTP } = require("../config/emailServices"); // Corrected typo
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose"); // Added for transactions
 
 const registerValidation = [
   body("name").notEmpty().withMessage("Name is required"),
@@ -66,13 +67,16 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/register", registerValidation, async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
+  //const session = await mongoose.startSession();
+  // session.startTransaction();
 
   try {
-    const { name, email, password } = req.body;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name, email, password, phoneNo, profilePhoto } = req.body;
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const hashedOtp = await bcrypt.hash(otp, 10);
@@ -81,20 +85,30 @@ router.post("/register", registerValidation, async (req, res) => {
       name,
       email,
       password,
+      phoneNo, // <-- Added phoneNo
+      profilePhoto, // <-- Added profilePhoto
       otp: hashedOtp,
       otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
     });
 
-    await user.save();
+    const newUser = await user.save();
+
+    const newWallet = new Wallet({ userId: newUser._id });
+    await newWallet.save();
+
+    // await session.commitTransaction();
+    // session.endSession();
 
     sendOTP(email, otp);
 
     res.status(201).json({
       message:
         "User registered successfully. An OTP has been sent to your email.",
-      userId: user._id,
+      userId: newUser._id,
     });
   } catch (err) {
+    // await session.abortTransaction();
+    session.endSession();
     res.status(500).json({ message: "Server error: " + err.message });
   }
 });
@@ -109,12 +123,10 @@ router.post("/login", async (req, res) => {
     }
 
     if (!user.isVerified) {
-      return res
-        .status(401)
-        .json({
-          message:
-            "Account is not verified. Please check your email for the OTP.",
-        });
+      return res.status(401).json({
+        message:
+          "Account is not verified. Please check your email for the OTP.",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);

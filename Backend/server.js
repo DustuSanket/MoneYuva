@@ -14,6 +14,7 @@ connectDB();
 
 const userRouter = require("./routes/user.routes");
 const walletRouter = require("./routes/wallet.routes");
+const onboardingRouter = require("./routes/onboarding.routes");
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
@@ -24,6 +25,7 @@ app.use(morgan("dev"));
 app.use("/api/users", userRouter);
 app.use("/api/wallet", walletRouter);
 app.use("/api/upload", uploadRouter);
+app.use("/api", onboardingRouter);
 
 app.get("/", (req, res) => {
   res.send("Server is up and running!");

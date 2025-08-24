@@ -45,10 +45,11 @@ router.post(
       return res.status(400).json({ errors: errors.array() });
     }
     try {
+      const { amount, userId } = req.body;
       const options = {
-        amount: req.body.amount,
+        amount: amount,
         currency: "INR",
-        receipt: `receipt_${Math.floor(Math.random() * 10000000)}`,
+        receipt: `receipt_order_${userId}_${Date.now()}`,
       };
       const order = await razorpay.orders.create(options);
       res.json(order);
@@ -110,6 +111,83 @@ router.post("/verify-payment", async (req, res) => {
     await session.abortTransaction();
     session.endSession();
     res.status(500).send(error);
+  }
+});
+
+router.post("/pay-to-user", async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { senderId, recipientEmail, amount, description } = req.body;
+    const numericAmount = parseFloat(amount);
+
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: "Invalid amount provided." });
+    }
+
+    const senderWallet = await Wallet.findOne({ userId: senderId }).session(
+      session
+    );
+    if (!senderWallet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Sender's wallet not found." });
+    }
+
+    const recipientUser = await User.findOne({ email: recipientEmail }).session(
+      session
+    );
+    if (!recipientUser) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Recipient not found." });
+    }
+    const recipientWallet = await Wallet.findOne({
+      userId: recipientUser._id,
+    }).session(session);
+    if (!recipientWallet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Recipient's wallet not found." });
+    }
+
+    if (senderWallet.balance < numericAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: "Insufficient balance." });
+    }
+
+    senderWallet.balance -= numericAmount;
+    recipientWallet.balance += numericAmount;
+    await senderWallet.save({ session });
+    await recipientWallet.save({ session });
+
+    const senderTransaction = new Transaction({
+      walletId: senderWallet._id,
+      amount: numericAmount,
+      type: "debit",
+      description: `Payment to ${recipientEmail}`,
+    });
+    const recipientTransaction = new Transaction({
+      walletId: recipientWallet._id,
+      amount: numericAmount,
+      type: "credit",
+      description: `Received from ${senderWallet.userId}`,
+    });
+    await senderTransaction.save({ session });
+    await recipientTransaction.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({ message: "Payment successful." });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    res.status(500).json({ message: error.message });
   }
 });
 

@@ -1,5 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  experimental: {
+    disableOptimizedLoading: true,
+    disableRSC: false,
+  },
   images: {
     remotePatterns: [
       {

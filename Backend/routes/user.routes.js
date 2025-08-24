@@ -2,11 +2,12 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/user.model");
 const Wallet = require("../models/wallet.model");
+const Budget = require("../models/budget.model"); // <-- Added this
 const { body, validationResult } = require("express-validator");
 const bcrypt = require("bcrypt");
-const { sendOTP } = require("../config/emailServices"); // Corrected typo
+const { sendOTP } = require("../config/emailServices");
 const jwt = require("jsonwebtoken");
-const mongoose = require("mongoose"); // Added for transactions
+const mongoose = require("mongoose");
 
 const registerValidation = [
   body("name").notEmpty().withMessage("Name is required"),
@@ -25,6 +26,42 @@ const registerValidation = [
     .withMessage("Password must be at least 6 characters long"),
 ];
 
+// GET user by ID
+router.get("/:userId", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// PUT to update a user's profile
+router.put("/:userId", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const { name, email, phoneNo, profilePhoto } = req.body;
+
+    if (name) user.name = name;
+    if (email) user.email = email;
+    if (phoneNo) user.phoneNo = phoneNo;
+    if (profilePhoto) user.profilePhoto = profilePhoto;
+
+    const updatedUser = await user.save();
+    res.json(updatedUser);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// POST to verify OTP
 router.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
 
@@ -57,6 +94,7 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
+// GET all users
 router.get("/", async (req, res) => {
   try {
     const users = await User.find();
@@ -66,13 +104,16 @@ router.get("/", async (req, res) => {
   }
 });
 
+// POST to register a new user
 router.post("/register", registerValidation, async (req, res) => {
-  //const session = await mongoose.startSession();
+  const session = await mongoose.startSession();
   // session.startTransaction();
 
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      // await session.abortTransaction();
+      // session.endSession();
       return res.status(400).json({ errors: errors.array() });
     }
 
@@ -85,16 +126,30 @@ router.post("/register", registerValidation, async (req, res) => {
       name,
       email,
       password,
-      phoneNo, // <-- Added phoneNo
-      profilePhoto, // <-- Added profilePhoto
+      phoneNo,
+      profilePhoto,
       otp: hashedOtp,
       otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
     });
 
-    const newUser = await user.save();
+    const newUser = await user.save({ session });
 
     const newWallet = new Wallet({ userId: newUser._id });
-    await newWallet.save();
+    // await newWallet.save({ session });
+
+    // Create a new budget with default categories for the new user
+    const defaultCategories = [
+      { name: "Food & Mess", amount: 0 },
+      { name: "Transport", amount: 0 },
+      { name: "Shopping", amount: 0 },
+      { name: "Entertainment", amount: 0 },
+    ];
+    const newBudget = new Budget({
+      userId: newUser._id,
+      monthlyBudget: 0,
+      categories: defaultCategories,
+    });
+    await newBudget.save({ session });
 
     // await session.commitTransaction();
     // session.endSession();
@@ -108,11 +163,12 @@ router.post("/register", registerValidation, async (req, res) => {
     });
   } catch (err) {
     // await session.abortTransaction();
-    session.endSession();
+    // session.endSession();
     res.status(500).json({ message: "Server error: " + err.message });
   }
 });
 
+// POST to log in a user
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 

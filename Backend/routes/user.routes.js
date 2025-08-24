@@ -47,12 +47,25 @@ router.put("/:userId", async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const { name, email, phoneNo, profilePhoto } = req.body;
+    const { name, email, phoneNo, profilePhoto, password } = req.body;
 
     if (name) user.name = name;
-    if (email) user.email = email;
+    if (email && email !== user.email) {
+      // Prevent duplicate email
+      const existingUser = await User.findOne({ email });
+      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+        return res.status(400).json({ message: "Email is already in use" });
+      }
+      user.email = email;
+    }
     if (phoneNo) user.phoneNo = phoneNo;
     if (profilePhoto) user.profilePhoto = profilePhoto;
+    if (password) {
+      if (password.length < 6) {
+        return res.status(400).json({ message: "Password must be at least 6 characters long" });
+      }
+      user.password = await bcrypt.hash(password, 10);
+    }
 
     const updatedUser = await user.save();
     res.json(updatedUser);
@@ -106,18 +119,16 @@ router.get("/", async (req, res) => {
 
 // POST to register a new user
 router.post("/register", registerValidation, async (req, res) => {
-  const session = await mongoose.startSession();
-  // session.startTransaction();
-
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      // await session.abortTransaction();
-      // session.endSession();
       return res.status(400).json({ errors: errors.array() });
     }
 
     const { name, email, password, phoneNo, profilePhoto } = req.body;
+
+    // Hash password before saving
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const hashedOtp = await bcrypt.hash(otp, 10);
@@ -125,34 +136,38 @@ router.post("/register", registerValidation, async (req, res) => {
     const user = new User({
       name,
       email,
-      password,
+      password: hashedPassword, // <-- hashed password
       phoneNo,
       profilePhoto,
       otp: hashedOtp,
       otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
     });
 
-    const newUser = await user.save({ session });
+    const newUser = await user.save();
 
-    const newWallet = new Wallet({ userId: newUser._id });
-    // await newWallet.save({ session });
+    // Ensure wallet is created for new user (avoid duplicate)
+    let wallet = await Wallet.findOne({ userId: newUser._id });
+    if (!wallet) {
+      wallet = new Wallet({ userId: newUser._id });
+      await wallet.save();
+    }
 
-    // Create a new budget with default categories for the new user
-    const defaultCategories = [
-      { name: "Food & Mess", amount: 0 },
-      { name: "Transport", amount: 0 },
-      { name: "Shopping", amount: 0 },
-      { name: "Entertainment", amount: 0 },
-    ];
-    const newBudget = new Budget({
-      userId: newUser._id,
-      monthlyBudget: 0,
-      categories: defaultCategories,
-    });
-    await newBudget.save({ session });
-
-    // await session.commitTransaction();
-    // session.endSession();
+    // Create a new budget with default categories for the new user (avoid duplicate)
+    let budget = await Budget.findOne({ userId: newUser._id });
+    if (!budget) {
+      const defaultCategories = [
+        { name: "Food & Mess", allocated: 0 },
+        { name: "Transport", allocated: 0 },
+        { name: "Shopping", allocated: 0 },
+        { name: "Entertainment", allocated: 0 },
+      ];
+      budget = new Budget({
+        userId: newUser._id,
+        monthlyBudget: 0,
+        categories: defaultCategories,
+      });
+      await budget.save();
+    }
 
     sendOTP(email, otp);
 
@@ -162,8 +177,6 @@ router.post("/register", registerValidation, async (req, res) => {
       userId: newUser._id,
     });
   } catch (err) {
-    // await session.abortTransaction();
-    // session.endSession();
     res.status(500).json({ message: "Server error: " + err.message });
   }
 });
@@ -198,7 +211,13 @@ router.post("/login", async (req, res) => {
       expiresIn: "1h",
     });
 
-    res.json({ message: "Login successful.", token, user });
+    // Only send minimal user info, never send OTP or password
+    res.json({
+      message: "Login successful.",
+      token,
+      userId: user._id,
+      email: user.email,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -44,40 +44,59 @@ const UnauthenticatedHomePage = () => {
 
 export default function Home() {
   const [wallet, setWallet] = useState<any | null>(null);
+  const [budget, setBudget] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    const userId = localStorage.getItem("userId");
+    const token =
+      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const userId =
+      typeof window !== "undefined" ? localStorage.getItem("userId") : null;
 
     if (!token || !userId) {
+      setWallet(null);
+      setBudget(null);
       setLoading(false);
       return;
     }
 
-    const fetchWalletData = async () => {
+    const fetchData = async () => {
       try {
-        const response = await axios.get(`${API_BASE_URL}/wallet/${userId}`, {
+        const walletRes = await axios.get(`${API_BASE_URL}/wallet/${userId}`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
-        setWallet(response.data);
-        setLoading(false);
+        setWallet(walletRes.data);
+
+        const budgetRes = await axios.get(
+          `${API_BASE_URL}/wallet/budget/${userId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        setBudget(budgetRes.data);
       } catch (err: any) {
-        console.error("Failed to fetch wallet data", err);
+        // Only redirect if unauthorized, otherwise show error
         if (err.response && err.response.status === 401) {
-          router.push("/login");
+          localStorage.removeItem("token");
+          localStorage.removeItem("userId");
+          setWallet(null);
+          setBudget(null);
+        } else {
+          setError("Failed to load data. Please try again.");
         }
-        setError("Failed to load data. Please try logging in again.");
+      } finally {
         setLoading(false);
       }
     };
 
-    fetchWalletData();
-  }, [router]);
+    fetchData();
+  }, []);
 
   if (loading) {
     return (
@@ -87,17 +106,20 @@ export default function Home() {
     );
   }
 
-  if (!wallet) {
+  // If not authenticated, show welcome page
+  if (!wallet || !budget) {
     return <UnauthenticatedHomePage />;
   }
 
+  // If wallet fetch failed for other reasons, show error
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen">{error}</div>
     );
   }
 
-  if (wallet.balance === null) {
+  // If wallet exists but no balance, show welcome message
+  if (wallet.balance === null || wallet.balance === undefined) {
     return (
       <div className="flex items-center justify-center h-full">
         <Card className="w-full max-w-md shadow-2xl">
@@ -118,11 +140,14 @@ export default function Home() {
     );
   }
 
+  // Show dashboard if authenticated and wallet/budget exist
   return (
     <div className="space-y-8">
-      <FinancialOverview
-        balance={wallet.balance}
-        transactions={wallet.transactions}
+      {/* ...dashboard content... */}
+    </div>
+  );
+}
+        categories={budget.categories}
       />
     </div>
   );

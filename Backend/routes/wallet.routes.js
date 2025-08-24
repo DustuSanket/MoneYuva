@@ -2,10 +2,12 @@ const express = require("express");
 const router = express.Router();
 const Wallet = require("../models/wallet.model");
 const Transaction = require("../models/transaction.model");
+const Budget = require("../models/budget.model");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const { body, validationResult } = require("express-validator");
+const User = require("../models/user.model");
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -15,23 +17,74 @@ const razorpay = new Razorpay({
 // GET a user's wallet balance and transaction history
 router.get("/:userId", async (req, res) => {
   try {
+    // Validate userId format (MongoDB ObjectId)
+    if (!req.params.userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid userId format" });
+    }
     const wallet = await Wallet.findOne({ userId: req.params.userId });
     if (!wallet) {
       return res.status(404).json({ message: "Wallet not found" });
     }
-
     const transactions = await Transaction.find({ walletId: wallet._id }).sort({
       createdAt: -1,
     });
+    res.json({ balance: wallet.balance, transactions });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
-    res.json({ balance: wallet.balance, transactions: transactions });
+// GET a user's budget and categories
+router.get("/budget/:userId", async (req, res) => {
+  try {
+    const budget = await Budget.findOne({ userId: req.params.userId });
+    if (!budget) {
+      return res.status(404).json({ message: "Budget not found" });
+    }
+    res.json({
+      monthlyBudget: budget.monthlyBudget,
+      categories: budget.categories,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// POST to set monthly budget and categories
+router.post("/budget", async (req, res) => {
+  try {
+    const { userId, monthlyBudget, categories } = req.body;
+    let budget = await Budget.findOne({ userId });
+    if (!budget) {
+      budget = new Budget({ userId, monthlyBudget, categories });
+    } else {
+      budget.monthlyBudget = monthlyBudget;
+      budget.categories = categories;
+    }
+    await budget.save();
+    res.json({ message: "Budget set!", monthlyBudget, categories });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// PUT to update categories for a user
+router.put("/budget/:userId", async (req, res) => {
+  try {
+    const { categories } = req.body;
+    const budget = await Budget.findOne({ userId: req.params.userId });
+    if (!budget) {
+      return res.status(404).json({ message: "Budget not found" });
+    }
+    budget.categories = categories;
+    await budget.save();
+    res.json({ message: "Categories updated", categories });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
 // POST to create a new Razorpay order
-
 router.post(
   "/create-order",
   [
@@ -65,7 +118,6 @@ router.post("/verify-payment", async (req, res) => {
   session.startTransaction();
 
   try {
-    // userId is now a required part of the request body
     const { orderId, paymentId, signature, amount, userId } = req.body;
 
     const numericAmount = parseFloat(amount);
@@ -111,83 +163,6 @@ router.post("/verify-payment", async (req, res) => {
     await session.abortTransaction();
     session.endSession();
     res.status(500).send(error);
-  }
-});
-
-router.post("/pay-to-user", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { senderId, recipientEmail, amount, description } = req.body;
-    const numericAmount = parseFloat(amount);
-
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Invalid amount provided." });
-    }
-
-    const senderWallet = await Wallet.findOne({ userId: senderId }).session(
-      session
-    );
-    if (!senderWallet) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Sender's wallet not found." });
-    }
-
-    const recipientUser = await User.findOne({ email: recipientEmail }).session(
-      session
-    );
-    if (!recipientUser) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Recipient not found." });
-    }
-    const recipientWallet = await Wallet.findOne({
-      userId: recipientUser._id,
-    }).session(session);
-    if (!recipientWallet) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Recipient's wallet not found." });
-    }
-
-    if (senderWallet.balance < numericAmount) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Insufficient balance." });
-    }
-
-    senderWallet.balance -= numericAmount;
-    recipientWallet.balance += numericAmount;
-    await senderWallet.save({ session });
-    await recipientWallet.save({ session });
-
-    const senderTransaction = new Transaction({
-      walletId: senderWallet._id,
-      amount: numericAmount,
-      type: "debit",
-      description: `Payment to ${recipientEmail}`,
-    });
-    const recipientTransaction = new Transaction({
-      walletId: recipientWallet._id,
-      amount: numericAmount,
-      type: "credit",
-      description: `Received from ${senderWallet.userId}`,
-    });
-    await senderTransaction.save({ session });
-    await recipientTransaction.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.status(200).json({ message: "Payment successful." });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    res.status(500).json({ message: error.message });
   }
 });
 
